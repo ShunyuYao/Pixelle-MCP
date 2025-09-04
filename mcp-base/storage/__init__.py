@@ -8,6 +8,7 @@
 
 from .base import StorageBackend, FileInfo
 from .local_storage import LocalStorage
+from .oss_storage import OSSStorage
 from config.settings import settings, StorageType
 
 
@@ -19,6 +20,8 @@ class StorageFactory:
         """根据配置创建存储后端"""
         if settings.storage_type == StorageType.LOCAL:
             return LocalStorage()
+        elif settings.storage_type == StorageType.OSS:
+            return OSSStorage()
         else:
             raise ValueError(f"Unsupported storage type: {settings.storage_type}")
 
@@ -31,6 +34,7 @@ __all__ = [
     "StorageBackend", 
     "FileInfo", 
     "LocalStorage", 
+    "OSSStorage",
     "StorageFactory", 
     "storage"
 ] 

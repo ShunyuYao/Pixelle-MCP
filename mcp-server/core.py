@@ -7,6 +7,7 @@ import logging
 
 # load config.yml and inject environment variables
 load_yml_and_set_env("server")
+load_yml_and_set_env("client")  # 同时加载client配置，用于Gemini等LLM服务
 
 # initialize MCP server
 mcp = FastMCP(

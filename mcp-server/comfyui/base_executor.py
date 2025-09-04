@@ -6,6 +6,7 @@ import json
 import copy
 import tempfile
 import mimetypes
+import time
 from abc import ABC, abstractmethod
 from urllib.parse import urlparse
 from typing import Any, Optional, Dict, List, Tuple
@@ -16,6 +17,7 @@ import aiohttp
 from core import logger
 from utils.file_util import download_files
 from utils.file_uploader import upload
+from utils.oss_util import get_oss_uploader  # 导入OSS上传器
 from comfyui.workflow_parser import WorkflowParser, WorkflowMetadata
 from comfyui.models import ExecuteResult
 from utils.os_util import get_data_path
@@ -28,6 +30,7 @@ COMFYUI_COOKIES = os.getenv('COMFYUI_COOKIES')
 # 需要特殊媒体上传处理的节点类型
 MEDIA_UPLOAD_NODE_TYPES = {
     'LoadImage',
+    'LoadVideo',
     'VHS_LoadAudioUpload', 
     'VHS_LoadVideo',
 }
@@ -91,7 +94,7 @@ class ComfyUIExecutor(ABC):
             yield session
 
     async def transfer_result_files(self, result: ExecuteResult) -> ExecuteResult:
-        """转存结果文件到新的URL"""
+        """转存结果文件到OSS"""
         url_cache: Dict[str, str] = {}
         
         # 解析 ComfyUI cookies，用于下载需要认证的文件
@@ -106,13 +109,14 @@ class ComfyUIExecutor(ABC):
                     unique_urls.append(url)
                     seen.add(url)
             
-            # 下载并上传未缓存的url
+            # 下载并上传未缓存的url到OSS
             uncached_urls = [url for url in unique_urls if url not in url_cache]
             if uncached_urls:
                 with download_files(uncached_urls, cookies=cookies) as temp_files:
                     for temp_file, url in zip(temp_files, uncached_urls):
-                        new_url = upload(temp_file)
-                        url_cache[url] = new_url
+                        # 上传到OSS而不是mcp-base
+                        oss_url = self._upload_file_to_oss(temp_file)
+                        url_cache[url] = oss_url
             
             return [url_cache.get(url, url) for url in urls]
 
@@ -138,6 +142,30 @@ class ComfyUIExecutor(ABC):
         
         return ExecuteResult(**data)
 
+    def _upload_file_to_oss(self, local_file_path: str) -> str:
+        """上传文件到OSS并返回CDN URL"""
+        try:
+            # 获取OSS上传器
+            oss_uploader = get_oss_uploader()
+            
+            # 生成OSS路径
+            filename = os.path.basename(local_file_path)
+            timestamp = int(time.time())
+            oss_path = f"comfyui_outputs/{timestamp}_{filename}"
+            
+            # 上传到OSS
+            success = oss_uploader.upload_file(local_file_path, oss_path)
+            if not success:
+                raise Exception("OSS上传失败")
+            
+            # 返回OSS CDN URL
+            return oss_uploader.get_oss_url(oss_path)
+            
+        except Exception as e:
+            logger.error(f"OSS上传失败: {local_file_path}, 错误: {str(e)}")
+            # 如果OSS上传失败，回退到原来的mcp-base上传
+            return upload(local_file_path)
+
     async def _apply_param_mapping(self, workflow_data: Dict[str, Any], mapping: Any, param_value: Any):
         """根据参数映射应用单个参数"""
         node_id = mapping.node_id
@@ -158,7 +186,7 @@ class ComfyUIExecutor(ABC):
         
         # 优先级1：检查新的DSL handler_type标记
         if handler_type == "upload_rel":
-            await self._handle_media_upload(node_data, input_field, param_value)
+            await self._handle_oss_upload(node_data, input_field, param_value)
         # 优先级2：检查节点类型是否需要特殊媒体上传处理（向后兼容）
         elif node_class_type in MEDIA_UPLOAD_NODE_TYPES:
             await self._handle_media_upload(node_data, input_field, param_value)
@@ -186,6 +214,102 @@ class ComfyUIExecutor(ABC):
         else:
             # 直接使用参数值作为媒体名
             await self._set_node_param(node_data, input_field, param_value)
+
+    async def _handle_oss_upload(self, node_data: Dict[str, Any], input_field: str, param_value: Any):
+        """处理OSS上传 - 将本地URL上传到OSS并返回OSS链接"""
+        # 确保inputs存在
+        if "inputs" not in node_data:
+            node_data["inputs"] = {}
+        
+        # 如果参数值是以http开头的URL，检查是否为本地服务URL
+        if isinstance(param_value, str) and param_value.startswith(('http://', 'https://')):
+            # 检查是否为本地服务URL
+            if self._is_local_service_url(param_value):
+                try:
+                    # 下载文件并上传到OSS
+                    oss_url = await self._upload_to_oss_from_url(param_value)
+                    # 使用OSS URL作为节点的输入值
+                    await self._set_node_param(node_data, input_field, oss_url)
+                    logger.info(f"OSS上传成功: {oss_url}")
+                except Exception as e:
+                    logger.error(f"OSS上传失败: {str(e)}")
+                    raise Exception(f"OSS上传失败: {str(e)}")
+            else:
+                # 非本地服务URL，直接使用原URL
+                await self._set_node_param(node_data, input_field, param_value)
+                logger.info(f"非本地服务URL，直接使用: {param_value}")
+        else:
+            # 如果不是URL，直接使用参数值
+            await self._set_node_param(node_data, input_field, param_value)
+
+    def _is_local_service_url(self, url: str) -> bool:
+        """检查URL是否为本地服务URL"""
+        try:
+            parsed_url = urlparse(url)
+            host = parsed_url.hostname
+            
+            # 检查是否为本地IP地址
+            if host in ['localhost', '127.0.0.1', '0.0.0.0']:
+                return True
+            
+            # 检查是否为局域网IP地址（192.168.x.x, 10.x.x.x, 172.16-31.x.x）
+            if host:
+                parts = host.split('.')
+                if len(parts) == 4:
+                    first_octet = int(parts[0])
+                    second_octet = int(parts[1])
+                    
+                    # 192.168.x.x
+                    if first_octet == 192 and second_octet == 168:
+                        return True
+                    # 10.x.x.x
+                    elif first_octet == 10:
+                        return True
+                    # 172.16-31.x.x
+                    elif first_octet == 172 and 16 <= second_octet <= 31:
+                        return True
+            
+            return False
+        except Exception as e:
+            logger.warning(f"解析URL失败: {url}, 错误: {e}")
+            return False
+
+    async def _upload_to_oss_from_url(self, url: str) -> str:
+        """从URL下载文件并上传到OSS"""
+        # 解析URL获取文件名
+        parsed_url = urlparse(url)
+        filename = os.path.basename(parsed_url.path)
+        if not filename:
+            filename = f"temp_file_{hash(url)}.jpg"
+        
+        # 下载文件到临时目录
+        temp_path = os.path.join(TEMP_DIR, filename)
+        
+        try:
+            # 下载文件
+            async with self.get_comfyui_session() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        raise Exception(f"下载文件失败: HTTP {response.status}")
+                    
+                    # 保存到临时文件
+                    with open(temp_path, 'wb') as f:
+                        f.write(await response.read())
+            
+            # 上传到OSS
+            oss_uploader = get_oss_uploader()
+            oss_path = f"comfyui_inputs/{filename}"
+            success = oss_uploader.upload_file(temp_path, oss_path)
+            if not success:
+                raise Exception("OSS上传失败")
+            
+            # 返回OSS CDN URL
+            return oss_uploader.get_oss_url(oss_path)
+            
+        finally:
+            # 清理临时文件
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     async def _set_node_param(self, node_data: Dict[str, Any], input_field: str, param_value: Any):
         """设置节点参数"""

@@ -21,3 +21,6 @@ redeploy.sh
 logs/
 config*.yml
 */config*.yml
+uv.lock
+module_tests
+.vscode/

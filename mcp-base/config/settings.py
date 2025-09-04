@@ -19,7 +19,8 @@ load_yml_and_set_env("base")
 class StorageType(str, Enum):
     """存储类型枚举"""
     LOCAL = "local"
-    # 未来可扩展: OSS = "oss", COS = "cos"
+    OSS = "oss"
+    # 未来可扩展: COS = "cos"
 
 
 class Settings(BaseSettings):
