@@ -15,7 +15,9 @@ from converters.tool_converter import tools_from_chaintlit_to_openai
 from chat.chat_handler import handle_mcp_connect, handle_mcp_disconnect
 from chat.chat_settings import setup_chat_settings, setup_settings_update
 import chat.chat_handler as tool_handler
+from chat.tool_sidebar import update_sidebar
 from utils.file_uploader import upload
+from api_endpoints import start_api_server, update_shared_data_store
 
 
 @cl.set_chat_profiles
@@ -37,6 +39,9 @@ async def start():
     """初始化聊天会话"""
     await setup_chat_settings()
     
+    # 启动API服务器（仅启动一次）
+    start_api_server(port=9004)
+    
     # 从settings中获取系统提示词，如果没有则使用默认值
     settings = cl.user_session.get("settings", {})
     system_prompt = settings.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
@@ -46,6 +51,12 @@ async def start():
         content=system_prompt
     )
     cl.chat_context.add(sys_message)
+    
+    # 初始化侧边栏（保持兼容性）
+    await update_sidebar()
+    
+    # 更新共享数据存储
+    update_shared_data_store()
     
 @cl.on_settings_update
 async def on_settings_update(settings):
@@ -95,6 +106,12 @@ async def on_message(message: cl.Message):
         messages=messages,
         model_info=model_info,
     )
+    
+    # 更新侧边栏显示最新的工具调用记录
+    await update_sidebar()
+    
+    # 更新共享数据存储供API使用
+    update_shared_data_store()
 
 
 if __name__ == "__main__":

@@ -111,6 +111,15 @@ async def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         result_with_duration = _format_result_with_duration(error_msg)
         current_step.output = result_with_duration
         record_step()
+        
+        # 异步更新侧边栏（避免循环导入）
+        try:
+            from chat.tool_sidebar import update_sidebar
+            import asyncio
+            asyncio.create_task(update_sidebar())
+        except Exception as sidebar_e:
+            logger.warning(f"更新侧边栏失败: {sidebar_e}")
+        
         return result_with_duration
     
     # Get MCP session
@@ -120,6 +129,15 @@ async def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         result_with_duration = _format_result_with_duration(error_msg)
         current_step.output = result_with_duration
         record_step()
+        
+        # 异步更新侧边栏（避免循环导入）
+        try:
+            from chat.tool_sidebar import update_sidebar
+            import asyncio
+            asyncio.create_task(update_sidebar())
+        except Exception as sidebar_e:
+            logger.warning(f"更新侧边栏失败: {sidebar_e}")
+        
         return result_with_duration
     
     try:
@@ -134,6 +152,16 @@ async def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
             error_msg = json.dumps({"error": f"Tool execution failed: {error_content}"})
             result_with_duration = _format_result_with_duration(error_msg)
             current_step.output = result_with_duration
+            record_step()
+            
+            # 异步更新侧边栏（避免循环导入）
+            try:
+                from chat.tool_sidebar import update_sidebar
+                import asyncio
+                asyncio.create_task(update_sidebar())
+            except Exception as sidebar_e:
+                logger.warning(f"更新侧边栏失败: {sidebar_e}")
+            
             return result_with_duration
         
         # Extract content text
@@ -142,6 +170,15 @@ async def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         result_with_duration = _format_result_with_duration(str(content))
         current_step.output = result_with_duration
         record_step()
+        
+        # 异步更新侧边栏（避免循环导入）
+        try:
+            from chat.tool_sidebar import update_sidebar
+            import asyncio
+            asyncio.create_task(update_sidebar())
+        except Exception as e:
+            logger.warning(f"更新侧边栏失败: {e}")
+        
         return result_with_duration
         
     except Exception as e:
@@ -150,6 +187,15 @@ async def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> str:
         result_with_duration = _format_result_with_duration(error_msg)
         current_step.output = result_with_duration
         record_step()
+        
+        # 异步更新侧边栏（避免循环导入）
+        try:
+            from chat.tool_sidebar import update_sidebar
+            import asyncio
+            asyncio.create_task(update_sidebar())
+        except Exception as sidebar_e:
+            logger.warning(f"更新侧边栏失败: {sidebar_e}")
+        
         return result_with_duration
 
 
